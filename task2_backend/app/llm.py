@@ -1,6 +1,8 @@
 import os
+import json
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai
+from pydantic import BaseModel
 
 # ===============================
 # Load .env safely
@@ -16,55 +18,99 @@ if not os.getenv("GEMINI_API_KEY"):
 
 api_key = os.getenv("GEMINI_API_KEY")
 
-# ===============================
-# Gemini Configuration
-# ===============================
-if api_key:
-    genai.configure(api_key=api_key)
-else:
+if not api_key:
     print("CRITICAL: GEMINI_API_KEY missing from environment")
 
-def analyze_review(review_text: str):
-    fallback_summary = "The customer shared general feedback without specific issues."
-    fallback_action = "Monitor feedback trends and follow up if similar reviews increase."
-    fallback_reply = "Thank you for taking the time to share your feedback with us. We truly appreciate it."
+# ===============================
+# Gemini Client (NEW SDK)
+# ===============================
+client = genai.Client(api_key=api_key) if api_key else None
 
-    if not api_key:
+
+class AnalysisResult(BaseModel):
+    summary: str
+    action: str
+    reply: str
+
+
+# ===============================
+# Analyze Review (RATING-AWARE)
+# ===============================
+def analyze_review(review: str, rating: int):
+    # Dynamic and varied fallbacks based on rating
+    if rating <= 2:
+        fallback_summary = f"Customer expressed dissatisfaction (Rating: {rating})."
+        fallback_action = "Investigate the specific issue mentioned in the review and follow up."
+        fallback_reply = "We're sorry to hear about your experience. We are looking into this to improve."
+    elif rating == 3:
+        fallback_summary = f"Customer provided neutral/mixed feedback (Rating: {rating})."
+        fallback_action = "Monitor feedback trends and look for specific areas to improve."
+        fallback_reply = "Thank you for your feedback. We appreciate your honesty and will work to improve."
+    else:
+        fallback_summary = f"Customer had a positive experience (Rating: {rating})."
+        fallback_action = "Maintain current quality standards and thank the customer."
+        fallback_reply = "We're so glad you enjoyed your experience! Thank you for the kind words."
+
+    if not client:
         return fallback_summary, fallback_action, fallback_reply
 
+    # 🎯 Tone/Intent based on rating
+    if rating <= 2:
+        tone = "apologetic and empathetic"
+        intent = "Apologize sincerely, acknowledge the issue specifically from the review, and assure improvement."
+    elif rating == 3:
+        tone = "neutral and professional"
+        intent = "Thank the customer, acknowledge mixed feedback, and show openness to improvement."
+    else:
+        tone = "positive and enthusiastic"
+        intent = "Thank the customer warmly, reinforce positive points from the review, and encourage return."
+
     try:
-        model = genai.GenerativeModel("gemini-flash-latest")
-        
         prompt = f"""
-        Analyze the following customer review and provide:
-        1. SUMMARY: A concise summary of the review.
-        2. ACTION: A suggested business action based on the feedback.
-        3. REPLY: A polite customer support reply.
+You are an intelligent customer feedback analysis AI. 
 
-        Review: "{review_text}"
+Input:
+Rating: {rating} stars
+Review: "{review}"
 
-        Format your response exactly as:
-        SUMMARY: <text>
-        ACTION: <text>
-        REPLY: <text>
-        """
-        
-        response = model.generate_content(prompt)
-        text = response.text
-        print(f"DEBUG: Gemini Response: {text}")
+Tone: {tone}
+Intent: {intent}
 
-        # Initialize with defaults
-        summary, action, reply = fallback_summary, fallback_action, fallback_reply
+Task:
+1. summary: A concise, specific sentence summarizing the sentiment and key details from this specific review. AVOID generic summaries.
+2. action: One clear, actionable business step based ONLY on this specific review.
+3. reply: A short, human-like response matching the tone and addressing the review content.
 
-        if "SUMMARY:" in text:
-            summary = text.split("SUMMARY:")[1].split("ACTION:")[0].strip()
-        if "ACTION:" in text:
-            action = text.split("ACTION:")[1].split("REPLY:")[0].strip()
-        if "REPLY:" in text:
-            reply = text.split("REPLY:")[1].strip()
+Output must be valid JSON matching the schema.
+"""
+
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt,
+            config={
+                'response_mime_type': 'application/json',
+                'response_schema': AnalysisResult,
+            }
+        )
+
+        if not response.text:
+            return fallback_summary, fallback_action, fallback_reply
+
+        data = json.loads(response.text)
+        summary = data.get("summary", fallback_summary)
+        action = data.get("action", fallback_action)
+        reply = data.get("reply", fallback_reply)
 
         return summary, action, reply
 
     except Exception as e:
         print(f"LLM API Error: {e}")
-        return fallback_summary, fallback_action, fallback_reply
+        # Try a simpler fallback for summary to avoid repeating the exact same message
+        if rating <= 2:
+             summary = f"Negative feedback received: '{review[:30]}...'"
+        elif rating == 3:
+             summary = f"Neutral feedback received: '{review[:30]}...'"
+        else:
+             summary = f"Positive feedback received: '{review[:30]}...'"
+        
+        return summary, fallback_action, fallback_reply

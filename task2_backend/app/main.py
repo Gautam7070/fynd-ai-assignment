@@ -1,22 +1,25 @@
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+
 from .database import SessionLocal, engine
 from . import models, schemas, crud, llm
 
+# Create DB tables
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Fynd AI Feedback System")
 
-# ✅ Allow ALL cross-origin access
+# ✅ Allow ALL cross-origin access (safe for assignment/demo)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # allow all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],          # allow all HTTP methods
-    allow_headers=["*"],          # allow all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
+# Dependency: DB session
 def get_db():
     db = SessionLocal()
     try:
@@ -25,6 +28,9 @@ def get_db():
         db.close()
 
 
+# ============================
+# Submit Review Endpoint
+# ============================
 @app.post("/submit-review", response_model=schemas.ReviewOutput)
 def submit_review(
     data: schemas.ReviewInput,
@@ -33,7 +39,11 @@ def submit_review(
     if not data.review.strip():
         raise HTTPException(status_code=400, detail="Empty review")
 
-    summary, action, response = llm.analyze_review(data.review)
+    # 🔥 FIX: Pass BOTH review AND rating to LLM
+    summary, action, response = llm.analyze_review(
+        review=data.review,
+        rating=data.rating
+    )
 
     crud.create_review(
         db=db,
@@ -50,15 +60,9 @@ def submit_review(
     }
 
 
-@app.get("/debug/config")
-def debug_config():
-    from . import llm
-    return {
-        "api_key_loaded": llm.api_key is not None,
-        "api_key_prefix": str(llm.api_key)[:5] if llm.api_key else None,
-        "env_path": llm.env_path
-    }
-
+# ============================
+# Admin Reviews Endpoint
+# ============================
 @app.get("/admin/reviews", response_model=list[schemas.AdminReview])
 def admin_reviews(db: Session = Depends(get_db)):
     reviews = crud.get_all_reviews(db)
@@ -71,3 +75,14 @@ def admin_reviews(db: Session = Depends(get_db)):
         }
         for r in reviews
     ]
+
+
+# ============================
+# Debug Endpoint (optional)
+# ============================
+@app.get("/debug/config")
+def debug_config():
+    return {
+        "llm_loaded": True,
+        "env_loaded": llm.api_key is not None
+    }
