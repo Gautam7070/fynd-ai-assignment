@@ -19,6 +19,12 @@ The system consists of three main components:
 - **Database**: SQLite (Local file based).
 
 ---
+## 🔗 Deployment Links
+
+- Backend API: https://fynd-ai-assignment-0y2z.onrender.com/
+- User Dashboard: https://fynd-ai-assignment-user-dashboard.vercel.app/
+- Admin Dashboard: https://fynd-ai-assignment-admin-dashboard.vercel.app/
+
 
 ## 🛠 Setup & Installation
 
